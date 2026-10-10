@@ -1,0 +1,47 @@
+name: Build Arena APK
+# Cloud build: put this project's files at the root of a GitHub repo, then run
+# Actions -> "Build Arena APK" -> Run workflow, and download the arena-apk artifact.
+# (The compiler's "GitHub (automatic)" method does all of this for you.)
+on:
+  workflow_dispatch:
+env:
+  # The built-in token authenticates anything the build downloads from GitHub:
+  # 1,000 requests/hour per repository instead of 60 unauthenticated.
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Cache Buildozer, Android SDK and pip
+        # Keeps the multi-hundred-MB Android SDK/NDK and the pip cache between
+        # runs: later builds start in a couple of minutes instead of 20-40, and
+        # re-downloading nothing means far fewer chances to be rate limited.
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            ~/.cache/pip
+          key: arena-${{ runner.os }}-${{ hashFiles('genapk_arena.py') }}
+          restore-keys: |
+            arena-${{ runner.os }}-
+      - name: Install system packages
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev build-essential
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> "$GITHUB_ENV"
+      - name: Install Buildozer
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade buildozer "cython==0.29.37" setuptools
+      - name: Build APK (GenAPK flow)
+        run: python genapk_arena.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arena-apk
+          path: bin/*.apk
+          if-no-files-found: error
