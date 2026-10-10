@@ -38,6 +38,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install --upgrade buildozer "cython==0.29.37" setuptools
+      - name: Unpack bundled assets
+        # The compiler uploads the pre-rendered icon/UI caches and other big asset folders as a few zip
+        # files (one file is far easier on GitHub than thousands). They are unpacked here, into the
+        # project root, so Buildozer bundles them into the APK exactly as if they had been committed.
+        run: |
+          shopt -s nullglob
+          for z in arena_assets_*.zip; do
+            echo "Unpacking $z"
+            unzip -q -o "$z"
+            rm -f "$z"
+          done
       - name: Build APK (GenAPK flow)
         run: python genapk_arena.py
       - uses: actions/upload-artifact@v4
