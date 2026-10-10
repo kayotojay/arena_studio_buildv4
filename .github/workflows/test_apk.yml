@@ -1,0 +1,35 @@
+name: Test Arena APK
+# Starts a virtual Android phone on GitHub, installs app.apk, launches it and uploads the logcat + screenshot.
+# Run: Actions -> "Test Arena APK" -> Run workflow, then download the arena-apk-test artifact.
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Test the APK on a virtual phone
+        uses: reactivecircus/android-emulator-runner@v2
+        continue-on-error: true
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: python3 arena_apk_test.py app.apk --seconds 30 --out test_out
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arena-apk-test
+          path: test_out/*
+          if-no-files-found: warn
