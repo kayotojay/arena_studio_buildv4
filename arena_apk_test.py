@@ -43,6 +43,46 @@ def find_adb(explicit=None):
     return None
 
 
+def find_emulator():
+    candidates = [shutil.which("emulator")]
+    for name in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        root = os.environ.get(name)
+        if root:
+            candidates += [os.path.join(root, "emulator", "emulator"), os.path.join(root, "emulator", "emulator.exe")]
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        candidates.append(os.path.join(local, "Android", "Sdk", "emulator", "emulator.exe"))
+    home = os.path.expanduser("~")
+    candidates += [os.path.join(home, "Android", "Sdk", "emulator", "emulator"),
+                   os.path.join(home, "Library", "Android", "sdk", "emulator", "emulator")]
+    for item in candidates:
+        if item and os.path.isfile(item):
+            return item
+    return None
+
+
+def start_emulator(say):
+    """Open the first Android Virtual Device (with its own window). Returns True when one was started."""
+    emulator = find_emulator()
+    if not emulator:
+        return False
+    try:
+        listing = subprocess.run([emulator, "-list-avds"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                 timeout=30, creationflags=NO_WINDOW).stdout.decode("utf-8", "replace")
+    except (OSError, subprocess.SubprocessError):
+        return False
+    avds = [line.strip() for line in listing.splitlines() if line.strip() and not line.startswith(("INFO", "WARNING"))]
+    if not avds:
+        return False
+    say("No phone is connected - starting the emulator '%s'. A phone window will open; the first boot can take a minute or two ..." % avds[0])
+    try:
+        subprocess.Popen([emulator, "-avd", avds[0], "-no-snapshot-save"], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
+    except OSError:
+        return False
+    return True
+
+
 class Adb:
     def __init__(self, path):
         self.path = path
@@ -90,6 +130,8 @@ def main():
     parser.add_argument("--out", default="apk_test_out")
     parser.add_argument("--package", help="app package id (found automatically when omitted)")
     parser.add_argument("--prefix", default="org.arenastudio", help="package prefix used to find the app")
+    parser.add_argument("--record", action="store_true", help="record the phone screen to recording.mp4 in the results folder")
+    parser.add_argument("--no-emulator", action="store_true", help="do not start an emulator when no device is connected")
     args = parser.parse_args()
     out = args.out
     os.makedirs(out, exist_ok=True)
@@ -115,11 +157,17 @@ def main():
     adb = Adb(path)
     adb.run("start-server", timeout=60)
     devices = []
-    for _ in range(30):
+    for _ in range(5 if (not args.no_emulator and find_emulator()) else 30):  # an emulator is a quick fallback, so do not wait a minute for a phone
         devices = [args.serial] if args.serial and args.serial in adb.devices() else ([] if args.serial else adb.devices())
         if devices:
             break
         time.sleep(2)
+    if not devices and not args.no_emulator and start_emulator(say):
+        for _ in range(90):
+            devices = [args.serial] if args.serial and args.serial in adb.devices() else ([] if args.serial else adb.devices())
+            if devices:
+                break
+            time.sleep(2)
     if not devices:
         say("ERROR: no phone or emulator is connected.\n"
             "Plug the phone in with USB debugging turned on and accept the prompt on its screen, or start an emulator,\n"
@@ -128,7 +176,7 @@ def main():
     adb.serial = devices[0]
     if len(devices) > 1:
         say("Several devices found; using " + adb.serial + " (use --serial to pick another).")
-    for _ in range(60):
+    for _ in range(120):
         if adb.shell("getprop", "sys.boot_completed").strip() == "1":
             break
         time.sleep(2)
@@ -162,6 +210,18 @@ def main():
         adb.run("shell", "run-as", package, "rm", "-f", name)
     adb.run("logcat", "-c")
     adb.shell("am", "force-stop", package)
+    recorder = None
+    if args.record:
+        adb.run("shell", "rm", "-f", "/sdcard/arena_test.mp4")
+        try:
+            recorder = subprocess.Popen(
+                [adb.path] + (["-s", adb.serial] if adb.serial else []) +
+                ["shell", "screenrecord", "--time-limit", str(min(180, args.seconds + 25)), "--bit-rate", "3000000",
+                 "/sdcard/arena_test.mp4"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
+            time.sleep(1)
+        except OSError:
+            recorder = None
     code, text = adb.run("shell", "monkey", "-p", package, "-c", "android.intent.category.LAUNCHER", "1", timeout=60)
     if "No activities found" in text or "monkey aborted" in text.lower():
         say("ERROR: the app has no launchable screen.\n" + text.strip()[-300:])
@@ -189,6 +249,16 @@ def main():
             break
 
     code, shot = adb.run("exec-out", "screencap", "-p", binary=True, timeout=30)
+    if recorder is not None:
+        say("Saving the screen recording ...")
+        adb.run("shell", "pkill", "-2", "screenrecord", timeout=20)   # SIGINT finishes the video file cleanly
+        try:
+            recorder.wait(timeout=45)
+        except subprocess.TimeoutExpired:
+            recorder.kill()
+        time.sleep(1)
+        adb.run("pull", "/sdcard/arena_test.mp4", os.path.join(out, "recording.mp4"), timeout=180)
+        adb.run("shell", "rm", "-f", "/sdcard/arena_test.mp4")
     if shot[:4] == b"\x89PNG":
         with open(os.path.join(out, "screenshot.png"), "wb") as handle:
             handle.write(shot)
