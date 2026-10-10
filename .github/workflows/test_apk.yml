@@ -1,5 +1,5 @@
 name: Test Arena APK
-# Starts a virtual Android phone on GitHub, installs app.apk, launches it and uploads the logcat + screenshot.
+# Starts a virtual Android phone on GitHub, installs app.apk, launches it and uploads the logcat, screenshot and a screen recording.
 # Run: Actions -> "Test Arena APK" -> Run workflow, then download the arena-apk-test artifact.
 on:
   workflow_dispatch:
@@ -25,7 +25,7 @@ jobs:
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: python3 arena_apk_test.py app.apk --seconds 30 --out test_out
+          script: python3 arena_apk_test.py app.apk --seconds 30 --out test_out --record
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
